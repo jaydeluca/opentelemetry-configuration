@@ -4,7 +4,8 @@
     "compile-schema": "node scripts/compile-schema.js",
     "generate-markdown": "node scripts/generate-markdown.js",
     "validate-snippets": "node scripts/validate-snippets.js",
-    "fix-language-implementations": "node scripts/fix-language-implementations.js"
+    "fix-language-implementations": "node scripts/fix-language-implementations.js",
+    "synchronize-documentation": "node scripts/synchronize-documentation.js"
   },
   "devDependencies": {
     "ajv-cli": "5.0.0"

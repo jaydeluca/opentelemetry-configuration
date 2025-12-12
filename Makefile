@@ -48,6 +48,15 @@ fix-language-implementations: compile-schema
 generate-markdown: validate-snippets
 	npm run-script generate-markdown || exit 1; \
 
+.PHONY: synchronize-documentation
+synchronize-documentation: compile-schema
+	@if [ -z "$(DOCS_REPO)" ]; then \
+		echo "Error: DOCS_REPO variable is required"; \
+		echo "Usage: make synchronize-documentation DOCS_REPO=/path/to/opentelemetry.io"; \
+		exit 1; \
+	fi
+	npm run-script synchronize-documentation -- --docs-repo $(DOCS_REPO) || exit 1;
+
 .PHONY: install-tools
 install-tools:
 	npm install

@@ -1,0 +1,233 @@
+name: Synchronize OpenTelemetry.io Documentation
+
+on:
+  schedule:
+    # Run weekly on Mondays at 3 AM UTC
+    - cron: '0 3 * * 1'
+  workflow_dispatch: # Allow manual triggers
+    inputs:
+      target_repo_owner:
+        description: 'Repository owner to create PR against (e.g., "jaydeluca" for fork, "open-telemetry" for upstream)'
+        required: false
+        type: string
+        default: 'jaydeluca'
+      target_branch:
+        description: 'Target branch in opentelemetry.io repository (default: main)'
+        required: false
+        type: string
+        default: 'main'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  synchronize-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout opentelemetry-configuration
+        uses: actions/checkout@v4
+        with:
+          path: opentelemetry-configuration
+
+      - name: Determine target repository
+        id: target_repo
+        run: |
+          # Determine which opentelemetry.io repo to use
+          TARGET_OWNER="${{ inputs.target_repo_owner || 'jaydeluca' }}"
+          FORK_OWNER="${{ secrets.DOCS_REPO_OWNER || github.repository_owner }}"
+
+          # Check if targeting a fork (not open-telemetry)
+          if [ "$TARGET_OWNER" != "open-telemetry" ]; then
+            echo "is_fork=true" >> $GITHUB_OUTPUT
+            echo "repo_owner=$FORK_OWNER" >> $GITHUB_OUTPUT
+            echo "Using fork: $FORK_OWNER/opentelemetry.io"
+          else
+            echo "is_fork=false" >> $GITHUB_OUTPUT
+            echo "repo_owner=open-telemetry" >> $GITHUB_OUTPUT
+            echo "Using upstream: open-telemetry/opentelemetry.io"
+          fi
+
+      - name: Checkout opentelemetry.io
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.target_repo.outputs.repo_owner }}/opentelemetry.io
+          path: opentelemetry.io
+          ref: ${{ inputs.target_branch || 'main' }}
+          token: ${{ secrets.PAT_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Sync fork with upstream
+        if: steps.target_repo.outputs.is_fork == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          FORK_OWNER: ${{ secrets.DOCS_REPO_OWNER || github.repository_owner }}
+          TARGET_BRANCH: ${{ inputs.target_branch || 'main' }}
+        run: |
+          cd opentelemetry.io
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Add upstream remote
+          git remote add upstream https://github.com/open-telemetry/opentelemetry.io.git || true
+
+          # Fetch upstream changes
+          git fetch upstream
+
+          # Sync target branch with upstream
+          git checkout ${TARGET_BRANCH}
+
+          # Try to merge from upstream branch (if it exists), otherwise just use local branch
+          if git ls-remote --heads upstream ${TARGET_BRANCH} | grep -q ${TARGET_BRANCH}; then
+            git merge upstream/${TARGET_BRANCH} --no-edit || echo "Already up to date"
+          else
+            echo "Branch ${TARGET_BRANCH} does not exist in upstream, using local branch only"
+          fi
+
+          # Add authenticated origin remote for pushing
+          git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/${FORK_OWNER}/opentelemetry.io.git
+
+          # Push synced changes back to fork
+          git push origin ${TARGET_BRANCH} || echo "Nothing to push"
+        continue-on-error: false
+
+      - name: Set up Node.js for opentelemetry-configuration
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Install Node.js dependencies for opentelemetry-configuration
+        run: npm install
+        working-directory: opentelemetry-configuration
+
+      - name: Generate documentation
+        run: |
+          make synchronize-documentation DOCS_REPO=../opentelemetry.io
+        working-directory: opentelemetry-configuration
+
+      - name: Set up Node.js for opentelemetry.io
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: opentelemetry.io/.nvmrc
+
+      - name: Install Node.js dependencies for opentelemetry.io
+        run: npm install --omit=optional
+        working-directory: opentelemetry.io
+
+      - name: Format and fix documentation
+        run: npm run test-and-fix
+        working-directory: opentelemetry.io
+        continue-on-error: true
+
+      - name: Check for documentation changes
+        id: check_changes
+        run: |
+          cd opentelemetry.io
+          if git diff --quiet content/en/docs/languages/sdk-configuration/; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No documentation changes detected"
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Documentation changes detected:"
+            git --no-pager diff --name-only content/en/docs/languages/sdk-configuration/
+          fi
+
+      - name: Get version info
+        if: steps.check_changes.outputs.has_changes == 'true'
+        id: version_info
+        run: |
+          cd opentelemetry-configuration
+          # Get the latest file format version from package.json or a version file
+          # For now, use a timestamp-based branch name
+          TIMESTAMP=$(date +%Y%m%d)
+          BRANCH_NAME="config-docs-${TIMESTAMP}"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
+
+      - name: Configure git
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          cd opentelemetry.io
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create branch and commit changes
+        if: steps.check_changes.outputs.has_changes == 'true'
+        env:
+          TARGET_BRANCH: ${{ inputs.target_branch || 'main' }}
+        run: |
+          cd opentelemetry.io
+
+          # Ensure we're on the target branch
+          git checkout ${TARGET_BRANCH}
+
+          # Create or reset branch from current target branch (which is synced with upstream)
+          git checkout -B ${{ steps.version_info.outputs.branch_name }}
+
+          # Add and commit only the documentation changes
+          git add content/en/docs/languages/sdk-configuration/*.md
+          git commit -m "Update SDK configuration documentation
+
+          This updates the language implementation status tables for the OpenTelemetry SDK declarative configuration.
+
+          Generated by opentelemetry-configuration repository." || echo "No changes to commit"
+
+      - name: Push to fork and create PR
+        if: steps.check_changes.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          FORK_OWNER: ${{ secrets.DOCS_REPO_OWNER || github.repository_owner }}
+          TARGET_OWNER: ${{ inputs.target_repo_owner || 'jaydeluca' }}
+          TARGET_BRANCH: ${{ inputs.target_branch || 'main' }}
+        run: |
+          cd opentelemetry.io
+
+          # Clear any existing git credentials
+          git config --unset-all http.https://github.com/.extraheader || true
+
+          # Verify token is set
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "ERROR: GH_TOKEN is not set. Please configure PAT_TOKEN secret."
+            exit 1
+          fi
+
+          # Add fork as remote with token authentication (remove first if exists)
+          git remote remove fork 2>/dev/null || true
+          git remote add fork https://x-access-token:${GH_TOKEN}@github.com/${FORK_OWNER}/opentelemetry.io.git
+
+          # Push branch to fork (force push to update if exists)
+          BRANCH="${{ steps.version_info.outputs.branch_name }}"
+          git push -f fork "$BRANCH"
+
+          # Determine PR head format (cross-repo PRs need "owner:branch" format)
+          if [ "${TARGET_OWNER}" = "${FORK_OWNER}" ]; then
+            PR_HEAD="$BRANCH"
+          else
+            PR_HEAD="${FORK_OWNER}:${BRANCH}"
+          fi
+
+          # Build PR body
+          PR_BODY="## Update SDK Configuration Documentation
+
+          This PR updates the language implementation status tables for the OpenTelemetry SDK declarative configuration.
+
+          ### Changes
+
+          - Language implementation status table updated with latest support information from the [opentelemetry-configuration](https://github.com/open-telemetry/opentelemetry-configuration) repository
+
+          ---
+
+          🤖 _This PR was automatically generated by [opentelemetry-configuration](https://github.com/open-telemetry/opentelemetry-configuration)_
+
+          **Target:** ${TARGET_OWNER}/opentelemetry.io (branch: ${TARGET_BRANCH})"
+
+          # Create PR (or update if already exists by pushing to same branch)
+          gh pr create \
+            --repo "${TARGET_OWNER}/opentelemetry.io" \
+            --base "${TARGET_BRANCH}" \
+            --head "${PR_HEAD}" \
+            --title "Update SDK configuration documentation" \
+            --body "$PR_BODY" \
+            || echo "PR may already exist"
