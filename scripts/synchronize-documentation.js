@@ -115,7 +115,7 @@ function generateLanguageImplementationStatus() {
                         propertyOverride => propertyOverride.property === sourceSchemaProperty.property
                     );
                     const status = propertyOverride ? propertyOverride.status : typeSupportStatus.status;
-                    supportStatusDetails.push(`* \`${sourceSchemaProperty.property}\`: ${status}<br>`);
+                    supportStatusDetails.push(`• \`${sourceSchemaProperty.property}\`: ${status}<br>`);
                 });
             } else {
                 sourceSchemaType.sortedEnumValues().forEach(enumValue => {
@@ -123,7 +123,7 @@ function generateLanguageImplementationStatus() {
                         enumOverride => enumOverride.enumValue === enumValue
                     );
                     const status = enumValueOverride ? enumValueOverride.status : typeSupportStatus.status;
-                    supportStatusDetails.push(`* \`${enumValue}\`: ${status}<br>`);
+                    supportStatusDetails.push(`• \`${enumValue}\`: ${status}<br>`);
                 });
             }
 
@@ -135,7 +135,7 @@ function generateLanguageImplementationStatus() {
         output.push(`\n`);
     });
 
-    return output.join('');
+    return output.join('').trimEnd();
 }
 
 /**

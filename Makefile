@@ -51,8 +51,9 @@ generate-markdown: validate-snippets
 .PHONY: synchronize-documentation
 synchronize-documentation: compile-schema
 	@if [ -z "$(DOCS_REPO)" ]; then \
-		echo "Error: DOCS_REPO variable is required"; \
+		echo "Error: DOCS_REPO path is required"; \
 		echo "Usage: make synchronize-documentation DOCS_REPO=/path/to/opentelemetry.io"; \
+		echo "   or: DOCS_REPO=/path/to/opentelemetry.io make synchronize-documentation"; \
 		exit 1; \
 	fi
 	npm run-script synchronize-documentation -- --docs-repo $(DOCS_REPO) || exit 1;
