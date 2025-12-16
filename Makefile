@@ -52,11 +52,15 @@ generate-markdown: validate-snippets
 synchronize-documentation: compile-schema
 	@if [ -z "$(DOCS_REPO)" ]; then \
 		echo "Error: DOCS_REPO path is required"; \
-		echo "Usage: make synchronize-documentation DOCS_REPO=/path/to/opentelemetry.io"; \
-		echo "   or: DOCS_REPO=/path/to/opentelemetry.io make synchronize-documentation"; \
+		echo "Usage: make synchronize-documentation DOCS_REPO=/path/to/opentelemetry.io [PAGE=language-implementation|types]"; \
+		echo "   or: DOCS_REPO=/path/to/opentelemetry.io PAGE=types make synchronize-documentation"; \
 		exit 1; \
 	fi
-	npm run-script synchronize-documentation -- --docs-repo $(DOCS_REPO) || exit 1;
+	@if [ -z "$(PAGE)" ]; then \
+		npm run-script synchronize-documentation -- --docs-repo $(DOCS_REPO) || exit 1; \
+	else \
+		npm run-script synchronize-documentation -- --docs-repo $(DOCS_REPO) --page $(PAGE) || exit 1; \
+	fi
 
 .PHONY: install-tools
 install-tools:
