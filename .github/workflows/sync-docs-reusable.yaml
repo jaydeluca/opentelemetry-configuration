@@ -60,6 +60,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: generate-token
+        # Allow failure when secrets are not available (fork testing mode)
         continue-on-error: true
         uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
         with:
@@ -74,15 +75,15 @@ jobs:
           if [ -n "${{ steps.generate-token.outputs.token }}" ]; then
             echo "token=${{ steps.generate-token.outputs.token }}" >> $GITHUB_OUTPUT
             echo "mode=upstream" >> $GITHUB_OUTPUT
-            echo "Using upstream bot authentication"
+            echo "✓ Using GitHub App authentication (otelbot)"
           elif [ -n "${{ secrets.PAT_TOKEN }}" ]; then
             echo "token=${{ secrets.PAT_TOKEN }}" >> $GITHUB_OUTPUT
             echo "mode=fork" >> $GITHUB_OUTPUT
-            echo "Using PAT token for fork testing"
+            echo "✓ Using PAT token for fork testing"
           else
-            echo "token=${{ github.token }}" >> $GITHUB_OUTPUT
-            echo "mode=default" >> $GITHUB_OUTPUT
-            echo "Using default GITHUB_TOKEN"
+            echo "❌ ERROR: No suitable authentication token found"
+            echo "Required: Either OTELBOT_GITHUB_APP_ID + OTELBOT_GITHUB_APP_PRIVATE_KEY or PAT_TOKEN"
+            exit 1
           fi
       - name: Checkout opentelemetry-configuration
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
@@ -92,11 +93,9 @@ jobs:
       - name: Determine target repository
         id: target_repo
         run: |
-          # Determine which opentelemetry.io repo to use
           TARGET_OWNER="${{ inputs.target_repo_owner }}"
           FORK_OWNER="${{ secrets.DOCS_REPO_OWNER || github.repository_owner }}"
 
-          # Check if targeting a fork (not open-telemetry)
           if [ "$TARGET_OWNER" != "open-telemetry" ]; then
             echo "is_fork=true" >> $GITHUB_OUTPUT
             echo "repo_owner=$FORK_OWNER" >> $GITHUB_OUTPUT
@@ -116,46 +115,54 @@ jobs:
           token: ${{ steps.auth.outputs.token }}
           persist-credentials: false
 
+      - name: Determine git identity
+        id: git_identity
+        run: |
+          if [ "${{ steps.auth.outputs.mode }}" = "upstream" ]; then
+            echo "name=otelbot" >> $GITHUB_OUTPUT
+            echo "email=197425009+otelbot@users.noreply.github.com" >> $GITHUB_OUTPUT
+          else
+            echo "name=github-actions[bot]" >> $GITHUB_OUTPUT
+            echo "email=github-actions[bot]@users.noreply.github.com" >> $GITHUB_OUTPUT
+          fi
+
       - name: Sync fork with upstream
         if: steps.target_repo.outputs.is_fork == 'true'
+        working-directory: opentelemetry.io
         env:
           GH_TOKEN: ${{ steps.auth.outputs.token }}
           FORK_OWNER: ${{ secrets.DOCS_REPO_OWNER || github.repository_owner }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
+          GIT_NAME: ${{ steps.git_identity.outputs.name }}
+          GIT_EMAIL: ${{ steps.git_identity.outputs.email }}
         run: |
-          cd opentelemetry.io
+          git config user.name "${GIT_NAME}"
+          git config user.email "${GIT_EMAIL}"
 
-          # Configure git
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Add upstream remote
-          git remote add upstream https://github.com/open-telemetry/opentelemetry.io.git || true
-
-          # Fetch upstream changes
+          # Add upstream remote (ignore if already exists)
+          git remote add upstream https://github.com/open-telemetry/opentelemetry.io.git 2>/dev/null || true
           git fetch upstream
 
-          # Sync target branch with upstream
           git checkout ${TARGET_BRANCH}
 
-          # Try to merge from upstream branch (if it exists), otherwise just use local branch
+          # Sync with upstream if branch exists there
           if git ls-remote --heads upstream ${TARGET_BRANCH} | grep -q ${TARGET_BRANCH}; then
-            git merge upstream/${TARGET_BRANCH} --no-edit || echo "Already up to date"
+            echo "Merging from upstream/${TARGET_BRANCH}"
+            git merge upstream/${TARGET_BRANCH} --no-edit
           else
-            echo "Branch ${TARGET_BRANCH} does not exist in upstream, using local branch only"
+            echo "Branch ${TARGET_BRANCH} not found in upstream, using local branch"
           fi
 
-          # Add authenticated origin remote for pushing
+          # Push to fork origin
           git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/${FORK_OWNER}/opentelemetry.io.git
+          if ! git push origin ${TARGET_BRANCH}; then
+            echo "Push failed or nothing to push"
+          fi
 
-          # Push synced changes back to fork
-          git push origin ${TARGET_BRANCH} || echo "Nothing to push"
-        continue-on-error: false
-
-      - name: Set up Node.js for opentelemetry-configuration
+      - name: Set up Node.js
         uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
         with:
-          node-version: 'lts/*'
+          node-version-file: opentelemetry.io/.nvmrc
 
       - name: Install Node.js dependencies for opentelemetry-configuration
         run: npm install
@@ -170,11 +177,6 @@ jobs:
           fi
         working-directory: opentelemetry-configuration
 
-      - name: Set up Node.js for opentelemetry.io
-        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
-        with:
-          node-version-file: opentelemetry.io/.nvmrc
-
       - name: Install Node.js dependencies for opentelemetry.io
         run: npm install --omit=optional
         working-directory: opentelemetry.io
@@ -182,12 +184,11 @@ jobs:
       - name: Format and fix documentation
         run: npm run test-and-fix
         working-directory: opentelemetry.io
-        continue-on-error: true
 
       - name: Check for documentation changes
         id: check_changes
+        working-directory: opentelemetry.io
         run: |
-          cd opentelemetry.io
           if git diff --quiet content/en/docs/languages/sdk-configuration/; then
             echo "has_changes=false" >> $GITHUB_OUTPUT
             echo "No documentation changes detected"
@@ -201,7 +202,6 @@ jobs:
         if: steps.check_changes.outputs.has_changes == 'true'
         id: version_info
         run: |
-          cd opentelemetry-configuration
           TIMESTAMP=$(date +%Y%m%d)
           BRANCH_NAME="${{ inputs.branch_prefix }}-${TIMESTAMP}"
           echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
@@ -209,31 +209,23 @@ jobs:
 
       - name: Configure git identity
         if: steps.check_changes.outputs.has_changes == 'true'
+        working-directory: opentelemetry.io
+        env:
+          GIT_NAME: ${{ steps.git_identity.outputs.name }}
+          GIT_EMAIL: ${{ steps.git_identity.outputs.email }}
         run: |
-          cd opentelemetry.io
-          # Use otelbot identity in upstream mode, github-actions bot otherwise
-          if [ "${{ steps.auth.outputs.mode }}" = "upstream" ]; then
-            git config user.name "otelbot"
-            git config user.email "197425009+otelbot@users.noreply.github.com"
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-          fi
+          git config user.name "${GIT_NAME}"
+          git config user.email "${GIT_EMAIL}"
 
       - name: Create branch and commit changes
         if: steps.check_changes.outputs.has_changes == 'true'
+        working-directory: opentelemetry.io
         env:
           TARGET_BRANCH: ${{ inputs.target_branch }}
         run: |
-          cd opentelemetry.io
-
-          # Ensure we're on the target branch
-          git checkout ${TARGET_BRANCH}
-
           # Create or reset branch from current target branch (which is synced with upstream)
           git checkout -B ${{ steps.version_info.outputs.branch_name }}
 
-          # Add and commit only the documentation changes
           git add content/en/docs/languages/sdk-configuration/*.md
           git commit -m "${{ inputs.commit_title }}
 
@@ -241,6 +233,7 @@ jobs:
 
       - name: Push changes and create PR
         if: steps.check_changes.outputs.has_changes == 'true'
+        working-directory: opentelemetry.io
         env:
           GH_TOKEN: ${{ steps.auth.outputs.token }}
           AUTH_MODE: ${{ steps.auth.outputs.mode }}
@@ -248,12 +241,10 @@ jobs:
           TARGET_OWNER: ${{ inputs.target_repo_owner }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
         run: |
-          cd opentelemetry.io
 
           # Clear any existing git credentials
           git config --unset-all http.https://github.com/.extraheader || true
 
-          # Verify token is set
           if [ -z "${GH_TOKEN}" ]; then
             echo "ERROR: No authentication token available."
             exit 1
