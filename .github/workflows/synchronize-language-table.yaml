@@ -1,6 +1,9 @@
-name: Synchronize Types Documentation
+name: Synchronize Language Implementation Status
 
 on:
+  schedule:
+    # Run nightly at 3 AM UTC
+    - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       target_repo_owner:
@@ -19,17 +22,17 @@ permissions:
   pull-requests: write
 
 jobs:
-  sync-types:
+  sync-language-implementation:
     uses: ./.github/workflows/sync-docs-reusable.yaml
     with:
-      page_param: 'types'
-      branch_prefix: 'config-types'
-      commit_title: 'Update SDK configuration types documentation'
-      pr_title: 'Update SDK configuration types documentation'
-      pr_body_header: '## Update SDK Configuration Types Documentation
+      page_param: 'language-implementation'
+      branch_prefix: 'config-lang-impl'
+      commit_title: 'Update SDK configuration language implementation status'
+      pr_title: 'Update SDK configuration language implementation status'
+      pr_body_header: '## Update SDK Configuration Language Implementation Status
 
-This PR updates the types documentation for the OpenTelemetry SDK declarative configuration.'
-      pr_body_changes: 'Types documentation updated with latest information from the [opentelemetry-configuration](https://github.com/open-telemetry/opentelemetry-configuration) repository'
+This PR updates the language implementation status tables for the OpenTelemetry SDK declarative configuration.'
+      pr_body_changes: 'Language implementation status table updated with latest support information from the [opentelemetry-configuration](https://github.com/open-telemetry/opentelemetry-configuration) repository'
       target_repo_owner: ${{ inputs.target_repo_owner || 'open-telemetry' }}
       target_branch: ${{ inputs.target_branch || 'main' }}
     secrets:
