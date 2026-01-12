@@ -19,7 +19,7 @@ class DocUpdater {
     getMarkerPattern(markerId) {
         const begin = `<!-- BEGIN ${this.markerPrefix}: ${markerId} SOURCE: ${this.source} -->`;
         const end = `<!-- END ${this.markerPrefix}: ${markerId} SOURCE: ${this.source} -->`;
-        return { begin, end };
+        return {begin, end};
     }
 
     /**
@@ -27,7 +27,7 @@ class DocUpdater {
      * Returns { content: updatedContent, wasUpdated: boolean }
      */
     updateSection(content, markerId, newContent) {
-        const { begin, end } = this.getMarkerPattern(markerId);
+        const {begin, end} = this.getMarkerPattern(markerId);
 
         // Build regex pattern that matches both with and without SOURCE for backward compatibility
         const beginPattern = `<!-- BEGIN ${this.markerPrefix}: ${markerId}(?:\\s+SOURCE:\\s+[\\w-]+)? -->`;
@@ -39,13 +39,13 @@ class DocUpdater {
         );
 
         if (!pattern.test(content)) {
-            return { content, wasUpdated: false };
+            return {content, wasUpdated: false};
         }
 
         const replacement = `${begin}\n${newContent}\n${end}`;
         const updatedContent = content.replace(pattern, replacement);
 
-        return { content: updatedContent, wasUpdated: true };
+        return {content: updatedContent, wasUpdated: true};
     }
 
     /**
@@ -58,7 +58,7 @@ class DocUpdater {
         }
 
         const originalContent = fs.readFileSync(filePath, 'utf-8');
-        const { content: updatedContent, wasUpdated } = this.updateSection(
+        const {content: updatedContent, wasUpdated} = this.updateSection(
             originalContent,
             markerId,
             newContent
@@ -80,25 +80,25 @@ function generateLanguageImplementationStatus() {
     const sourceTypesByType = readSourceTypesByType();
     const sourceTypes = Object.values(sourceTypesByType);
 
-    const { messages, languageImplementations } = readAndFixLanguageImplementations();
+    const {messages, languageImplementations} = readAndFixLanguageImplementations();
     if (messages.length > 0) {
         throw new Error("Language implementations have problems. Please run fix-language-implementations and try again.");
     }
 
-    const output = [];
+    const tablesOutput = [];
 
     KNOWN_LANGUAGES.forEach(language => {
-        output.push(`### ${language}\n\n`);
+        tablesOutput.push(`### ${language} {#${language}}\n\n`);
 
         const languageImplementation = languageImplementations.find(item => item.language === language);
         if (!languageImplementation) {
             throw new Error(`Meta schema LanguageImplementation not found for language ${language}.`);
         }
 
-        output.push(`Latest supported file format: \`${languageImplementation.latestSupportedFileFormat}\`\n\n`);
+        tablesOutput.push(`Latest supported file format: \`${languageImplementation.latestSupportedFileFormat}\`\n\n`);
 
-        output.push(`| Type | Status | Notes | Support Status Details |\n`);
-        output.push(`|---|---|---|---|\n`);
+        tablesOutput.push(`| Type | Status | Notes | Support Status Details |\n`);
+        tablesOutput.push(`|---|---|---|---|\n`);
 
         languageImplementation.typeSupportStatuses.forEach(typeSupportStatus => {
             const sourceSchemaType = sourceTypes.find(item => item.type === typeSupportStatus.type);
@@ -130,10 +130,17 @@ function generateLanguageImplementationStatus() {
 
             const typeLink = `[\`${typeSupportStatus.type}\`](../types#${typeSupportStatus.type.toLowerCase()})`;
 
-            output.push(`| ${typeLink} | ${typeSupportStatus.status} | ${formattedNotes} | ${supportStatusDetails.join('')} |\n`);
+            tablesOutput.push(`| ${typeLink} | ${typeSupportStatus.status} | ${formattedNotes} | ${supportStatusDetails.join('')} |\n`);
         });
-        output.push(`\n`);
+        tablesOutput.push(`\n`);
     });
+
+    // Build final output with accordion shortcode and hidden data div
+    const output = [];
+    output.push(`{{< sdk-lang-status-accordion >}}\n\n`);
+    output.push(`<div class="language-implementation-status-content" style="display: none;">\n\n`);
+    output.push(tablesOutput.join(''));
+    output.push(`</div>`);
 
     return output.join('').trimEnd();
 }
@@ -197,8 +204,20 @@ function generateTypesDocumentation() {
                 constraints.push(`• \`${propertyName}\`: \`${JSON.stringify(property)}\`<br>`);
             }
         });
+        if (constraints.length === 1) {
+            constraints[0] = constraints[0].replace('• ', '');
+            constraints[0] = constraints[0].replace('<br>', '');
+        }
 
-        return constraints.join('');
+        return constraints.length > 0 ? constraints.join('') : 'None.';
+    };
+
+    const formatDescriptionWithLinks = (description) => {
+        // Convert "See [URL] for details/information/more information" patterns into hyperlinked text
+        return description.replace(
+            /See (https?:\/\/[^\s]+) for (details|information|more information|more details)/gi,
+            '([See here for more details]($1))'
+        );
     };
 
     const writeType = (sourceSchemaType) => {
@@ -208,61 +227,74 @@ function generateTypesDocumentation() {
 
         output.push(`### ${type} {#${type.toLowerCase()}}\n\n`);
 
-        if (isExperimentalType(type)) {
-            output.push('> **Warning:** This type is experimental and subject to breaking changes.\n\n');
-        }
-
         if (sourceSchemaType.schema.isSdkExtensionPlugin) {
             output.push(`\`${type}\` is an SDK extension plugin point.\n\n`);
         }
 
         if (description) {
-            output.push(`${description}\n\n`);
+            output.push(`${formatDescriptionWithLinks(description)}\n\n`);
         }
 
         if (sourceSchemaType.isEnumType()) {
             output.push("**This is an enum type.**\n\n");
+            output.push(`<div class="types-table">\n\n`);
             output.push(`| Value | Description |\n`);
             output.push(`|---|---|\n`);
             sourceSchemaType.sortedEnumValues().forEach(enumValue => {
                 const description = sourceSchemaType.schema['enumDescriptions'][enumValue];
-                const formattedDescription = description.split("\n").join("<br>");
+                const formattedDescription = formatDescriptionWithLinks(description).split("\n").join("<br>");
                 output.push(`| \`${enumValue}\` | ${formattedDescription} |\n`);
             });
-            output.push('\n');
+            output.push('\n</div>\n\n');
         } else {
             const properties = sourceSchemaType.sortedProperties();
             if (properties.length === 0) {
                 output.push("**No properties.**\n\n");
             } else {
-                output.push(`| Property | Type | Required? | Default Behavior | Description |\n`);
-                output.push("|---|---|---|---|---|\n");
+                // Check if any properties have constraints
+                const hasConstraints = properties.some(prop => formatConstraints(prop.schema) !== 'None.');
+
+                output.push(`<div class="types-table">\n\n`);
+                if (hasConstraints) {
+                    output.push(`| Property | Type | Default Behavior | Constraints | Description |\n`);
+                    output.push("|---|---|---|---|---|\n");
+                } else {
+                    output.push(`| Property | Type | Default Behavior | Description |\n`);
+                    output.push("|---|---|---|---|\n");
+                }
+
                 properties.forEach(sourceSchemaProperty => {
+                    const isRequired = required !== undefined && required.includes(sourceSchemaProperty.property);
                     let formattedProperty = `\`${sourceSchemaProperty.property}\``;
+                    if (isRequired) {
+                        formattedProperty += '<sup>*</sup>';
+                    }
                     if (isExperimentalProperty(sourceSchemaProperty.property)) {
                         formattedProperty += '<br>**⚠ Experimental**';
                     }
                     const formattedPropertyType = formatPropertyType(sourceSchemaProperty);
-                    const isRequired = required !== undefined && required.includes(sourceSchemaProperty.property);
                     const formattedDefaultBehavior = sourceSchemaProperty.formatDefaultAndNullBehavior();
-                    const formattedDescription = sourceSchemaProperty.schema.description.split("\n").join("<br>");
+                    const formattedDescription = formatDescriptionWithLinks(sourceSchemaProperty.schema.description).split("\n").join("<br>");
 
-                    output.push(`| ${formattedProperty} | ${formattedPropertyType} | \`${isRequired}\` | ${formattedDefaultBehavior} | ${formattedDescription} |\n`);
+                    if (hasConstraints) {
+                        const formattedConstraints = formatConstraints(sourceSchemaProperty.schema);
+                        output.push(`| ${formattedProperty} | ${formattedPropertyType} | ${formattedDefaultBehavior} | ${formattedConstraints} | ${formattedDescription} |\n`);
+                    } else {
+                        output.push(`| ${formattedProperty} | ${formattedPropertyType} | ${formattedDefaultBehavior} | ${formattedDescription} |\n`);
+                    }
                 });
-                output.push('\n');
+                output.push('\n</div>\n\n');
             }
         }
 
         const formattedConstraints = formatConstraints(sourceSchemaType.schema);
-        if (formattedConstraints.length > 0) {
+        if (formattedConstraints !== 'None.') {
             output.push('**Constraints:**\n\n');
             output.push(formattedConstraints);
             output.push('\n');
         }
     };
 
-    output.push("# Configuration Types\n\n");
-    output.push("This page documents all configuration types for the OpenTelemetry SDK declarative configuration.\n\n");
     output.push("## Stable Types\n\n");
     types.forEach(writeType);
 
@@ -395,4 +427,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     main();
 }
 
-export { DocUpdater, generateLanguageImplementationStatus, generateTypesDocumentation };
+export {DocUpdater, generateLanguageImplementationStatus, generateTypesDocumentation};
